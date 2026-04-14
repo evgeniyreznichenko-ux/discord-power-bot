@@ -1,4 +1,5 @@
 import os
+from enum import Enum
 from datetime import datetime, timezone
 
 import discord
@@ -17,11 +18,17 @@ SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH", "credentials.json")
 
 ALLOWED_CHANNELS = {
- 1493604626803593313,
+    1493604626803593313,
     1427698576066084985,
 }
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
+class UnitType(str, Enum):
+    tank = "tank"
+    air = "air"
+    missile = "missile"
 
 
 def require_env(name: str, value: str | None) -> str:
@@ -70,17 +77,24 @@ def get_all_records() -> list[dict]:
 
 def get_user_records(user_id: int) -> list[dict]:
     records = get_all_records()
-    return [r for r in records if str(r["user_id"]) == str(user_id)]
+    return [r for r in records if str(r.get("user_id", "")) == str(user_id)]
 
 
-def get_last_user_value(user_id: int) -> float | None:
+def get_last_user_record(user_id: int) -> dict | None:
     user_records = get_user_records(user_id)
     if not user_records:
         return None
+    return user_records[-1]
+
+
+def get_last_user_value(user_id: int) -> float | None:
+    last_record = get_last_user_record(user_id)
+    if not last_record:
+        return None
 
     try:
-        return float(user_records[-1]["power"])
-    except:
+        return float(last_record["power"])
+    except (KeyError, TypeError, ValueError):
         return None
 
 
@@ -108,8 +122,17 @@ def format_time(ts: str) -> str:
             rel = dt.strftime("%d.%m.%Y")
 
         return f"{formatted} ({rel})"
-    except:
+    except Exception:
         return ts
+
+
+def unit_label(value: str) -> str:
+    labels = {
+        "tank": "tank",
+        "air": "air",
+        "missile": "missile",
+    }
+    return labels.get(str(value).lower(), str(value))
 
 
 # ---------- Events ----------
@@ -128,12 +151,26 @@ async def on_ready():
 # ---------- Commands ----------
 
 @bot.tree.command(name="add", description="Add your power value")
-@app_commands.describe(value="Your new power value")
-async def add(interaction: discord.Interaction, value: float):
+@app_commands.describe(
+    value="Your new power value",
+    unit_type="Your troop type"
+)
+async def add(
+    interaction: discord.Interaction,
+    value: float,
+    unit_type: UnitType
+):
     if await reject_wrong_channel(interaction):
         return
 
-    last_value = get_last_user_value(interaction.user.id)
+    last_record = get_last_user_record(interaction.user.id)
+    last_value = None
+
+    if last_record:
+        try:
+            last_value = float(last_record["power"])
+        except (KeyError, TypeError, ValueError):
+            last_value = None
 
     if last_value is not None and value < last_value:
         await interaction.response.send_message(
@@ -147,16 +184,26 @@ async def add(interaction: discord.Interaction, value: float):
         str(interaction.user.id),
         interaction.user.display_name,
         str(value),
+        unit_type.value,
     ]
 
-    sheet.append_row(row)
+    try:
+        sheet.append_row(row)
+    except Exception as exc:
+        await interaction.response.send_message(
+            f"Failed to save data: {exc}",
+            ephemeral=True
+        )
+        return
 
     if last_value is None:
-        await interaction.response.send_message(f"✅ Saved: **{value:g}**")
+        await interaction.response.send_message(
+            f"✅ Saved: **{value:g}** [{unit_type.value}]"
+        )
     else:
         diff = value - last_value
         await interaction.response.send_message(
-            f"✅ Saved: **{value:g}**  ( +{diff:.2f} )"
+            f"✅ Saved: **{value:g}** [{unit_type.value}]  ( +{diff:.2f} )"
         )
 
 
@@ -172,18 +219,18 @@ async def show(interaction: discord.Interaction):
         return
 
     last_four = user_records[-4:]
-
     lines = [f"📊 {interaction.user.display_name} — last values:\n"]
 
     for record in reversed(last_four):
         power = record.get("power", "?")
+        unit_type = unit_label(record.get("type", "?"))
         timestamp = format_time(record.get("timestamp", ""))
-        lines.append(f"• **{power}** — {timestamp}")
+        lines.append(f"• **{power}** [{unit_type}] — {timestamp}")
 
     await interaction.response.send_message("\n".join(lines))
 
 
-@bot.tree.command(name="list", description="Show current values ranking")
+@bot.tree.command(name="list", description="Show current power values")
 async def list_cmd(interaction: discord.Interaction):
     if await reject_wrong_channel(interaction):
         return
@@ -194,37 +241,52 @@ async def list_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("No data yet.", ephemeral=True)
         return
 
-    latest_by_user = {}
+    latest_by_user: dict[str, dict] = {}
 
     for record in records:
         user_id = str(record.get("user_id", "")).strip()
         if user_id:
             latest_by_user[user_id] = record
 
-    def power_float(r):
+    def power_float(record: dict) -> float:
         try:
-            return float(r["power"])
-        except:
-            return -1
+            return float(record["power"])
+        except (KeyError, TypeError, ValueError):
+            return -1.0
 
-    sorted_rows = sorted(latest_by_user.values(), key=power_float, reverse=True)
+    sorted_rows = sorted(
+        latest_by_user.values(),
+        key=power_float,
+        reverse=True
+    )
 
-    medals = ["🥇", "🥈", "🥉"]
+    lines = ["📊 Current power:\n"]
 
-    lines = ["🏆 Current ranking:\n"]
+    for record in sorted_rows:
+        username = str(record.get("username", "Unknown"))
+        power = str(record.get("power", "?"))
+        unit_type = unit_label(record.get("type", "?"))
+        lines.append(f"• {username} — **{power}** [{unit_type}]")
 
-    for i, r in enumerate(sorted_rows, start=1):
-        username = r.get("username", "Unknown")
-        power = r.get("power", "?")
+    message = "\n".join(lines)
 
-        medal = medals[i - 1] if i <= 3 else f"{i}."
+    if len(message) <= 2000:
+        await interaction.response.send_message(message)
+        return
 
-        lines.append(f"{medal} {username} — **{power}**")
+    await interaction.response.send_message("List is long, sending in parts...")
 
-    await interaction.response.send_message("\n".join(lines))
+    chunk = ""
+    for line in lines:
+        if len(chunk) + len(line) + 1 > 2000:
+            await interaction.followup.send(chunk)
+            chunk = line
+        else:
+            chunk = f"{chunk}\n{line}" if chunk else line
 
+    if chunk:
+        await interaction.followup.send(chunk)
 
-# ---------- Start ----------
 
 if __name__ == "__main__":
     bot.run(TOKEN)
