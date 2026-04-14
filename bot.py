@@ -17,7 +17,8 @@ SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH", "credentials.json")
 
 ALLOWED_CHANNELS = {
-    1493604626803593313,
+ 1493604626803593313,
+    1427698576066084985,
 }
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
