@@ -1,6 +1,7 @@
 import os
 from enum import Enum
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -23,6 +24,8 @@ ALLOWED_CHANNELS = {
 }
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+DISPLAY_TZ = ZoneInfo("Europe/Berlin")
 
 
 class UnitType(str, Enum):
@@ -94,23 +97,28 @@ def get_last_user_value(user_id: int) -> float | None:
 
     try:
         return float(last_record["power"])
-    except (KeyError, TypeError, ValueError):
+    except:
         return None
 
 
-# ---------- Time formatting ----------
+# ---------- Time formatting (CET / CEST) ----------
 
 def format_time(ts: str) -> str:
     try:
-        dt = datetime.fromisoformat(ts)
-        now = datetime.now(timezone.utc)
-        diff = now - dt
+        dt_utc = datetime.fromisoformat(ts)
+        if dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+
+        dt_local = dt_utc.astimezone(DISPLAY_TZ)
+        now_local = datetime.now(DISPLAY_TZ)
+        diff = now_local - dt_local
 
         seconds = int(diff.total_seconds())
         minutes = seconds // 60
         hours = minutes // 60
 
-        formatted = dt.strftime("%d.%m.%Y %H:%M")
+        formatted = dt_local.strftime("%d.%m.%Y %H:%M")
+        tz_name = dt_local.tzname()  # CET або CEST
 
         if seconds < 60:
             rel = f"{seconds}s ago"
@@ -119,20 +127,15 @@ def format_time(ts: str) -> str:
         elif hours < 24:
             rel = f"{hours}h ago"
         else:
-            rel = dt.strftime("%d.%m.%Y")
+            rel = dt_local.strftime("%d.%m.%Y")
 
-        return f"{formatted} ({rel})"
-    except Exception:
+        return f"{formatted} {tz_name} ({rel})"
+    except:
         return ts
 
 
 def unit_label(value: str) -> str:
-    labels = {
-        "tank": "tank",
-        "air": "air",
-        "missile": "missile",
-    }
-    return labels.get(str(value).lower(), str(value))
+    return str(value)
 
 
 # ---------- Events ----------
@@ -169,15 +172,16 @@ async def add(
     if last_record:
         try:
             last_value = float(last_record["power"])
-        except (KeyError, TypeError, ValueError):
+        except:
             last_value = None
 
+    # строго більше
     if last_value is not None and value <= last_value:
         await interaction.response.send_message(
-            f"❌ Rejected: new value must be greater than your previous one ({last_value:g}).",
+            f"❌ New value must be higher than your previous one: {last_value:g}",
             ephemeral=True
-    )
-    return
+        )
+        return
 
     row = [
         datetime.now(timezone.utc).isoformat(),
@@ -187,14 +191,7 @@ async def add(
         unit_type.value,
     ]
 
-    try:
-        sheet.append_row(row)
-    except Exception as exc:
-        await interaction.response.send_message(
-            f"Failed to save data: {exc}",
-            ephemeral=True
-        )
-        return
+    sheet.append_row(row)
 
     if last_value is None:
         await interaction.response.send_message(
@@ -219,6 +216,7 @@ async def show(interaction: discord.Interaction):
         return
 
     last_four = user_records[-4:]
+
     lines = [f"📊 {interaction.user.display_name} — last values:\n"]
 
     for record in reversed(last_four):
@@ -241,31 +239,27 @@ async def list_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("No data yet.", ephemeral=True)
         return
 
-    latest_by_user: dict[str, dict] = {}
+    latest_by_user = {}
 
     for record in records:
         user_id = str(record.get("user_id", "")).strip()
         if user_id:
             latest_by_user[user_id] = record
 
-    def power_float(record: dict) -> float:
+    def power_float(r):
         try:
-            return float(record["power"])
-        except (KeyError, TypeError, ValueError):
-            return -1.0
+            return float(r["power"])
+        except:
+            return -1
 
-    sorted_rows = sorted(
-        latest_by_user.values(),
-        key=power_float,
-        reverse=True
-    )
+    sorted_rows = sorted(latest_by_user.values(), key=power_float, reverse=True)
 
     lines = ["📊 Current power:\n"]
 
-    for record in sorted_rows:
-        username = str(record.get("username", "Unknown"))
-        power = str(record.get("power", "?"))
-        unit_type = unit_label(record.get("type", "?"))
+    for r in sorted_rows:
+        username = r.get("username", "Unknown")
+        power = r.get("power", "?")
+        unit_type = unit_label(r.get("type", "?"))
         lines.append(f"• {username} — **{power}** [{unit_type}]")
 
     message = "\n".join(lines)
@@ -287,6 +281,8 @@ async def list_cmd(interaction: discord.Interaction):
     if chunk:
         await interaction.followup.send(chunk)
 
+
+# ---------- Start ----------
 
 if __name__ == "__main__":
     bot.run(TOKEN)
