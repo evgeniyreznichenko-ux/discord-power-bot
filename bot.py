@@ -172,12 +172,12 @@ async def add(
         except (KeyError, TypeError, ValueError):
             last_value = None
 
-    if last_value is not None and value < last_value:
+    if last_value is not None and value <= last_value:
         await interaction.response.send_message(
-            f"❌ Rejected: {value:g} < {last_value:g}",
+            f"❌ Rejected: new value must be greater than your previous one ({last_value:g}).",
             ephemeral=True
-        )
-        return
+    )
+    return
 
     row = [
         datetime.now(timezone.utc).isoformat(),
