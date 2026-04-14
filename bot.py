@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
@@ -41,7 +41,7 @@ async def on_ready():
 @app_commands.describe(value="Your power value, for example 45.5")
 async def add(interaction: discord.Interaction, value: float):
     row = [
-        datetime.now(UTC).isoformat(),
+        datetime.now(timezone.utc).isoformat(),
         str(interaction.user.id),
         interaction.user.display_name,
         str(value),
