@@ -90,17 +90,6 @@ def get_last_user_record(user_id: int) -> dict | None:
     return user_records[-1]
 
 
-def get_last_user_value(user_id: int) -> float | None:
-    last_record = get_last_user_record(user_id)
-    if not last_record:
-        return None
-
-    try:
-        return float(last_record["power"])
-    except:
-        return None
-
-
 # ---------- Time formatting (CET / CEST) ----------
 
 def format_time(ts: str) -> str:
@@ -118,7 +107,7 @@ def format_time(ts: str) -> str:
         hours = minutes // 60
 
         formatted = dt_local.strftime("%d.%m.%Y %H:%M")
-        tz_name = dt_local.tzname()  # CET або CEST
+        tz_name = dt_local.tzname()
 
         if seconds < 60:
             rel = f"{seconds}s ago"
@@ -132,10 +121,6 @@ def format_time(ts: str) -> str:
         return f"{formatted} {tz_name} ({rel})"
     except:
         return ts
-
-
-def unit_label(value: str) -> str:
-    return str(value)
 
 
 # ---------- Events ----------
@@ -175,10 +160,9 @@ async def add(
         except:
             last_value = None
 
-    # строго більше
     if last_value is not None and value <= last_value:
         await interaction.response.send_message(
-            f"❌ New value must be higher than your previous one: {last_value:g}",
+            f"❌ Must be higher than {last_value:g}",
             ephemeral=True
         )
         return
@@ -195,12 +179,12 @@ async def add(
 
     if last_value is None:
         await interaction.response.send_message(
-            f"✅ Saved: **{value:g}** [{unit_type.value}]"
+            f"✅ {value:g} {unit_type.value}"
         )
     else:
         diff = value - last_value
         await interaction.response.send_message(
-            f"✅ Saved: **{value:g}** [{unit_type.value}]  ( +{diff:.2f} )"
+            f"✅ {value:g} {unit_type.value} (+{diff:.2f})"
         )
 
 
@@ -217,13 +201,13 @@ async def show(interaction: discord.Interaction):
 
     last_four = user_records[-4:]
 
-    lines = [f"📊 {interaction.user.display_name} — last values:\n"]
+    lines = [f"📊 {interaction.user.display_name}\n"]
 
     for record in reversed(last_four):
         power = record.get("power", "?")
-        unit_type = unit_label(record.get("type", "?"))
+        unit = record.get("type", "?")
         timestamp = format_time(record.get("timestamp", ""))
-        lines.append(f"• **{power}** [{unit_type}] — {timestamp}")
+        lines.append(f"• {power} {unit} — {timestamp}")
 
     await interaction.response.send_message("\n".join(lines))
 
@@ -254,15 +238,24 @@ async def list_cmd(interaction: discord.Interaction):
 
     sorted_rows = sorted(latest_by_user.values(), key=power_float, reverse=True)
 
-    lines = ["📊 Current power:\n"]
+    max_name_len = max(len(r.get("username", "")) for r in sorted_rows)
+    max_power_len = max(len(str(r.get("power", ""))) for r in sorted_rows)
+    max_type_len = max(len(str(r.get("type", ""))) for r in sorted_rows)
+
+    lines = ["Power\n"]
 
     for r in sorted_rows:
         username = r.get("username", "Unknown")
-        power = r.get("power", "?")
-        unit_type = unit_label(r.get("type", "?"))
-        lines.append(f"• {username} — **{power}** [{unit_type}]")
+        power = str(r.get("power", "?"))
+        unit_type = str(r.get("type", ""))
 
-    message = "\n".join(lines)
+        name_col = username.ljust(max_name_len)
+        power_col = power.rjust(max_power_len)
+        type_col = unit_type.ljust(max_type_len)
+
+        lines.append(f"{name_col}   {power_col}   {type_col}")
+
+    message = "```\n" + "\n".join(lines) + "\n```"
 
     if len(message) <= 2000:
         await interaction.response.send_message(message)
@@ -270,15 +263,17 @@ async def list_cmd(interaction: discord.Interaction):
 
     await interaction.response.send_message("List is long, sending in parts...")
 
-    chunk = ""
+    chunk = "```\n"
     for line in lines:
-        if len(chunk) + len(line) + 1 > 2000:
+        if len(chunk) + len(line) + 1 > 1990:
+            chunk += "\n```"
             await interaction.followup.send(chunk)
-            chunk = line
+            chunk = "```\n" + line + "\n"
         else:
-            chunk = f"{chunk}\n{line}" if chunk else line
+            chunk += line + "\n"
 
-    if chunk:
+    if chunk.strip() != "```":
+        chunk += "```"
         await interaction.followup.send(chunk)
 
 
