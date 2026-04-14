@@ -16,6 +16,10 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH", "credentials.json")
 
+ALLOWED_CHANNELS = {
+    1493604626803593313,
+}
+
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
@@ -38,6 +42,21 @@ sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+def is_allowed_channel(interaction: discord.Interaction) -> bool:
+    return interaction.channel_id in ALLOWED_CHANNELS
+
+
+async def reject_wrong_channel(interaction: discord.Interaction) -> bool:
+    if is_allowed_channel(interaction):
+        return False
+
+    await interaction.response.send_message(
+        "This command is only available in the designated channel.",
+        ephemeral=True
+    )
+    return True
 
 
 def get_all_records() -> list[dict]:
@@ -74,6 +93,9 @@ async def on_ready():
 @bot.tree.command(name="add", description="Add your power value")
 @app_commands.describe(value="Your new power value, for example 45.5")
 async def add(interaction: discord.Interaction, value: float):
+    if await reject_wrong_channel(interaction):
+        return
+
     last_value = get_last_user_value(interaction.user.id)
 
     if last_value is not None and value < last_value:
@@ -100,9 +122,7 @@ async def add(interaction: discord.Interaction, value: float):
         return
 
     if last_value is None:
-        await interaction.response.send_message(
-            f"Saved: {value:g}"
-        )
+        await interaction.response.send_message(f"Saved: {value:g}")
     else:
         await interaction.response.send_message(
             f"Saved: {value:g} (previous: {last_value:g})"
@@ -111,6 +131,9 @@ async def add(interaction: discord.Interaction, value: float):
 
 @bot.tree.command(name="show", description="Show your last 4 values")
 async def show(interaction: discord.Interaction):
+    if await reject_wrong_channel(interaction):
+        return
+
     user_records = get_user_records(interaction.user.id)
 
     if not user_records:
@@ -130,6 +153,9 @@ async def show(interaction: discord.Interaction):
 
 @bot.tree.command(name="list", description="Show current value for each user")
 async def list_cmd(interaction: discord.Interaction):
+    if await reject_wrong_channel(interaction):
+        return
+
     records = get_all_records()
 
     if not records:
