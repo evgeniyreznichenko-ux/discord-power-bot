@@ -44,6 +44,8 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
+# ---------- Channel restriction ----------
+
 def is_allowed_channel(interaction: discord.Interaction) -> bool:
     return interaction.channel_id in ALLOWED_CHANNELS
 
@@ -58,6 +60,8 @@ async def reject_wrong_channel(interaction: discord.Interaction) -> bool:
     )
     return True
 
+
+# ---------- Data helpers ----------
 
 def get_all_records() -> list[dict]:
     return sheet.get_all_records()
@@ -75,9 +79,39 @@ def get_last_user_value(user_id: int) -> float | None:
 
     try:
         return float(user_records[-1]["power"])
-    except (KeyError, TypeError, ValueError):
+    except:
         return None
 
+
+# ---------- Time formatting ----------
+
+def format_time(ts: str) -> str:
+    try:
+        dt = datetime.fromisoformat(ts)
+        now = datetime.now(timezone.utc)
+        diff = now - dt
+
+        seconds = int(diff.total_seconds())
+        minutes = seconds // 60
+        hours = minutes // 60
+
+        formatted = dt.strftime("%d.%m.%Y %H:%M")
+
+        if seconds < 60:
+            rel = f"{seconds}s ago"
+        elif minutes < 60:
+            rel = f"{minutes} min ago"
+        elif hours < 24:
+            rel = f"{hours}h ago"
+        else:
+            rel = dt.strftime("%d.%m.%Y")
+
+        return f"{formatted} ({rel})"
+    except:
+        return ts
+
+
+# ---------- Events ----------
 
 @bot.event
 async def on_ready():
@@ -90,8 +124,10 @@ async def on_ready():
         print(f"Sync error: {exc}")
 
 
+# ---------- Commands ----------
+
 @bot.tree.command(name="add", description="Add your power value")
-@app_commands.describe(value="Your new power value, for example 45.5")
+@app_commands.describe(value="Your new power value")
 async def add(interaction: discord.Interaction, value: float):
     if await reject_wrong_channel(interaction):
         return
@@ -100,7 +136,7 @@ async def add(interaction: discord.Interaction, value: float):
 
     if last_value is not None and value < last_value:
         await interaction.response.send_message(
-            f"Rejected. Your new value ({value:g}) cannot be lower than your previous value ({last_value:g}).",
+            f"❌ Rejected: {value:g} < {last_value:g}",
             ephemeral=True
         )
         return
@@ -112,20 +148,14 @@ async def add(interaction: discord.Interaction, value: float):
         str(value),
     ]
 
-    try:
-        sheet.append_row(row)
-    except Exception as exc:
-        await interaction.response.send_message(
-            f"Failed to save data: {exc}",
-            ephemeral=True
-        )
-        return
+    sheet.append_row(row)
 
     if last_value is None:
-        await interaction.response.send_message(f"Saved: {value:g}")
+        await interaction.response.send_message(f"✅ Saved: **{value:g}**")
     else:
+        diff = value - last_value
         await interaction.response.send_message(
-            f"Saved: {value:g} (previous: {last_value:g})"
+            f"✅ Saved: **{value:g}**  ( +{diff:.2f} )"
         )
 
 
@@ -141,17 +171,18 @@ async def show(interaction: discord.Interaction):
         return
 
     last_four = user_records[-4:]
-    lines = [f"Last values for {interaction.user.display_name}:"]
 
-    for i, record in enumerate(reversed(last_four), start=1):
-        timestamp = str(record.get("timestamp", ""))
-        power = str(record.get("power", ""))
-        lines.append(f"{i}. {power} | {timestamp}")
+    lines = [f"📊 {interaction.user.display_name} — last values:\n"]
+
+    for record in reversed(last_four):
+        power = record.get("power", "?")
+        timestamp = format_time(record.get("timestamp", ""))
+        lines.append(f"• **{power}** — {timestamp}")
 
     await interaction.response.send_message("\n".join(lines))
 
 
-@bot.tree.command(name="list", description="Show current value for each user")
+@bot.tree.command(name="list", description="Show current values ranking")
 async def list_cmd(interaction: discord.Interaction):
     if await reject_wrong_channel(interaction):
         return
@@ -162,54 +193,37 @@ async def list_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("No data yet.", ephemeral=True)
         return
 
-    latest_by_user: dict[str, dict] = {}
+    latest_by_user = {}
 
     for record in records:
         user_id = str(record.get("user_id", "")).strip()
         if user_id:
             latest_by_user[user_id] = record
 
-    if not latest_by_user:
-        await interaction.response.send_message("No data yet.", ephemeral=True)
-        return
-
-    def power_as_float(record: dict) -> float:
+    def power_float(r):
         try:
-            return float(record["power"])
-        except (KeyError, TypeError, ValueError):
-            return -1.0
+            return float(r["power"])
+        except:
+            return -1
 
-    sorted_rows = sorted(
-        latest_by_user.values(),
-        key=power_as_float,
-        reverse=True
-    )
+    sorted_rows = sorted(latest_by_user.values(), key=power_float, reverse=True)
 
-    lines = ["Current values:"]
-    for i, record in enumerate(sorted_rows, start=1):
-        username = str(record.get("username", "Unknown"))
-        power = str(record.get("power", "N/A"))
-        lines.append(f"{i}. {username} — {power}")
+    medals = ["🥇", "🥈", "🥉"]
 
-    message = "\n".join(lines)
+    lines = ["🏆 Current ranking:\n"]
 
-    if len(message) <= 2000:
-        await interaction.response.send_message(message)
-        return
+    for i, r in enumerate(sorted_rows, start=1):
+        username = r.get("username", "Unknown")
+        power = r.get("power", "?")
 
-    await interaction.response.send_message("The list is too long, sending it in parts...")
+        medal = medals[i - 1] if i <= 3 else f"{i}."
 
-    chunk = ""
-    for line in lines:
-        if len(chunk) + len(line) + 1 > 2000:
-            await interaction.followup.send(chunk)
-            chunk = line
-        else:
-            chunk = f"{chunk}\n{line}" if chunk else line
+        lines.append(f"{medal} {username} — **{power}**")
 
-    if chunk:
-        await interaction.followup.send(chunk)
+    await interaction.response.send_message("\n".join(lines))
 
+
+# ---------- Start ----------
 
 if __name__ == "__main__":
     bot.run(TOKEN)
