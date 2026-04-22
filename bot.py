@@ -1,4 +1,5 @@
 import os
+import re
 from enum import Enum
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -24,7 +25,6 @@ ALLOWED_CHANNELS = {
 }
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
 DISPLAY_TZ = ZoneInfo("Europe/Berlin")
 
 
@@ -53,6 +53,34 @@ sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+def normalize_power_input(value: float) -> tuple[float | None, str | None]:
+    raw = f"{value}".replace(",", ".").strip()
+    raw = raw.rstrip("0").rstrip(".") if "." in raw else raw
+
+    if "." in raw:
+        if not re.fullmatch(r"\d{2}\.\d{1,2}", raw):
+            return None, "Use format like 69.44"
+        parsed = float(raw)
+        if not (10 <= parsed < 100):
+            return None, "Value must be between 10 and 99.99"
+        return parsed, None
+
+    if not raw.isdigit():
+        return None, "Invalid number"
+
+    if len(raw) == 2:
+        return float(raw), None
+
+    if len(raw) == 4:
+        corrected = float(f"{raw[:2]}.{raw[2:]}")
+        return corrected, None
+
+    if len(raw) > 4:
+        return None, "Too many digits (example: 69.44)"
+
+    return None, "Invalid format (use 69.44 or 6944)"
 
 
 # ---------- Channel restriction ----------
@@ -119,7 +147,7 @@ def format_time(ts: str) -> str:
             rel = dt_local.strftime("%d.%m.%Y")
 
         return f"{formatted} {tz_name} ({rel})"
-    except:
+    except Exception:
         return ts
 
 
@@ -151,16 +179,24 @@ async def add(
     if await reject_wrong_channel(interaction):
         return
 
+    normalized_value, error = normalize_power_input(value)
+    if error:
+        await interaction.response.send_message(
+            f"❌ {error}",
+            ephemeral=True
+        )
+        return
+
     last_record = get_last_user_record(interaction.user.id)
     last_value = None
 
     if last_record:
         try:
             last_value = float(last_record["power"])
-        except:
+        except Exception:
             last_value = None
 
-    if last_value is not None and value <= last_value:
+    if last_value is not None and normalized_value <= last_value:
         await interaction.response.send_message(
             f"❌ Must be higher than {last_value:g}",
             ephemeral=True
@@ -171,7 +207,7 @@ async def add(
         datetime.now(timezone.utc).isoformat(),
         str(interaction.user.id),
         interaction.user.display_name,
-        str(value),
+        str(normalized_value),
         unit_type.value,
     ]
 
@@ -179,12 +215,12 @@ async def add(
 
     if last_value is None:
         await interaction.response.send_message(
-            f"✅ {value:g} {unit_type.value}"
+            f"✅ {normalized_value:g} {unit_type.value}"
         )
     else:
-        diff = value - last_value
+        diff = normalized_value - last_value
         await interaction.response.send_message(
-            f"✅ {value:g} {unit_type.value} (+{diff:.2f})"
+            f"✅ {normalized_value:g} {unit_type.value} (+{diff:.2f})"
         )
 
 
@@ -200,7 +236,6 @@ async def show(interaction: discord.Interaction):
         return
 
     last_four = user_records[-4:]
-
     lines = [f"📊 {interaction.user.display_name}\n"]
 
     for record in reversed(last_four):
@@ -233,7 +268,7 @@ async def list_cmd(interaction: discord.Interaction):
     def power_float(r):
         try:
             return float(r["power"])
-        except:
+        except Exception:
             return -1
 
     sorted_rows = sorted(latest_by_user.values(), key=power_float, reverse=True)
@@ -276,8 +311,6 @@ async def list_cmd(interaction: discord.Interaction):
         chunk += "```"
         await interaction.followup.send(chunk)
 
-
-# ---------- Start ----------
 
 if __name__ == "__main__":
     bot.run(TOKEN)
