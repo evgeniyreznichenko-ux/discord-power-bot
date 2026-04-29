@@ -83,8 +83,6 @@ def normalize_power_input(value: float) -> tuple[float | None, str | None]:
     return None, "Invalid format (use 69.44 or 6944)"
 
 
-# ---------- Channel restriction ----------
-
 def is_allowed_channel(interaction: discord.Interaction) -> bool:
     return interaction.channel_id in ALLOWED_CHANNELS
 
@@ -99,8 +97,6 @@ async def reject_wrong_channel(interaction: discord.Interaction) -> bool:
     )
     return True
 
-
-# ---------- Data helpers ----------
 
 def get_all_records() -> list[dict]:
     return sheet.get_all_records()
@@ -118,7 +114,32 @@ def get_last_user_record(user_id: int) -> dict | None:
     return user_records[-1]
 
 
-# ---------- Time formatting (CET / CEST) ----------
+def keep_only_last_user_records(user_id: int, keep: int = 4) -> None:
+    all_values = sheet.get_all_values()
+
+    if len(all_values) <= 1:
+        return
+
+    rows = all_values[1:]
+    user_row_indexes = []
+
+    for index, row in enumerate(rows, start=2):
+        if len(row) < 2:
+            continue
+
+        row_user_id = row[1]
+
+        if str(row_user_id) == str(user_id):
+            user_row_indexes.append(index)
+
+    if len(user_row_indexes) <= keep:
+        return
+
+    rows_to_delete = user_row_indexes[:-keep]
+
+    for row_index in reversed(rows_to_delete):
+        sheet.delete_rows(row_index)
+
 
 def format_time(ts: str) -> str:
     try:
@@ -151,8 +172,6 @@ def format_time(ts: str) -> str:
         return ts
 
 
-# ---------- Events ----------
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
@@ -163,8 +182,6 @@ async def on_ready():
     except Exception as exc:
         print(f"Sync error: {exc}")
 
-
-# ---------- Commands ----------
 
 @bot.tree.command(name="add", description="Add your power value")
 @app_commands.describe(
@@ -212,6 +229,7 @@ async def add(
     ]
 
     sheet.append_row(row)
+    keep_only_last_user_records(interaction.user.id, keep=4)
 
     if last_value is None:
         await interaction.response.send_message(
